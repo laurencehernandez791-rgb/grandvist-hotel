@@ -1646,4 +1646,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     print(f"\n  GrandVista Hotel -> http://localhost:{port}")
     print("  Default login: admin / admin123\n")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=os.environ.get("DEBUG", "false").lower() == "true")
