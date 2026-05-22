@@ -4,8 +4,10 @@ from functools import wraps
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
 
 app = Flask(__name__)
-app.secret_key = "grandvista-2024"
+# Use environment variable for secret key in production
+app.secret_key = os.environ.get("SECRET_KEY", "grandvista-2024")
 DB_FILE = os.path.join(os.path.dirname(__file__), "hotel.db")
+EXCEL_FILE = os.path.join(os.path.dirname(__file__), "bookings.xlsx")
 
 # Rooms will be loaded from DB, but we keep these as defaults for first-time setup
 DEFAULT_ROOMS = [
@@ -13,25 +15,25 @@ DEFAULT_ROOMS = [
         "type": "Deluxe Room",   "price": 4500,  "capacity": 30, 
         "features": "King Bed, WiFi, AC, Smart TV, Free Breakfast",
         "description": "Experience unparalleled comfort in our Deluxe Room. Featuring a plush King-sized bed, state-of-the-art Smart TV, and elegant warm lighting, it's the perfect sanctuary for business or leisure travelers.",
-        "image": "static/images/deluxe.png"
+        "image": "https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=800&q=80"
     },
     {
         "type": "Junior Suite",  "price": 7800,  "capacity": 30, 
         "features": "City View, WiFi, AC, Mini Bar, Free Breakfast",
         "description": "Our Junior Suite offers a sophisticated blend of style and space. Enjoy a breathtaking city view from large floor-to-ceiling windows, a cozy lounge area, and a fully stocked mini-bar.",
-        "image": "static/images/junior.png"
+        "image": "https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=800&q=80"
     },
     {
         "type": "Premier Ocean", "price": 9500,  "capacity": 30, 
         "features": "Ocean View, Balcony, WiFi, AC, Free Breakfast",
         "description": "Wake up to the sound of waves in our Premier Ocean room. This beachfront paradise features a private balcony with stunning turquoise water views, perfect for a romantic getaway or a peaceful retreat.",
-        "image": "static/images/premier.png"
+        "image": "https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=800&q=80"
     },
     {
         "type": "Family Suite",  "price": 11200, "capacity": 30, 
         "features": "2 Bedrooms, Kitchenette, WiFi, AC, Free Breakfast",
         "description": "Designed with families in mind, our spacious Family Suite features two separate bedrooms and a convenient kitchenette. It provides a warm, homey atmosphere with all the luxuries of a world-class hotel.",
-        "image": "static/images/family.png"
+        "image": "https://images.unsplash.com/photo-1566665797739-1674de7a421a?auto=format&fit=crop&w=800&q=80"
     },
 ]
 AMENITIES = [
@@ -131,9 +133,9 @@ def init_db():
     else:
         # Update existing rooms to include Free Breakfast if missing
         conn.execute("UPDATE rooms SET features = features || ', Free Breakfast' WHERE features NOT LIKE '%Free Breakfast%'")
-        # Update descriptions and images for default types if they are empty
+        # Update descriptions and images for default types if they are empty or have broken local paths
         for r in DEFAULT_ROOMS:
-            conn.execute("UPDATE rooms SET description=?, image_url=? WHERE type=? AND (description='' OR description IS NULL)", 
+            conn.execute("UPDATE rooms SET description=?, image_url=? WHERE type=? AND (description='' OR description IS NULL OR image_url LIKE 'static/%' OR image_url='')", 
                          (r['description'], r['image'], r['type']))
         conn.commit()
 
@@ -158,6 +160,31 @@ def get_rooms():
     rooms = conn.execute("SELECT * FROM rooms").fetchall()
     conn.close()
     return rooms
+
+
+def append_booking_to_excel(b):
+  try:
+    from openpyxl import Workbook, load_workbook 
+  except Exception:
+    return
+  path = EXCEL_FILE
+  headers = ['Reference', 'First Name', 'Last Name', 'Email', 'Phone', 'Check-in', 'Check-out', 'Nights', 'Room Type', 'Total Price', 'Status', 'Discount', 'Payment', 'Booking Type', 'Date Created']
+  # Create workbook if missing
+  if not os.path.exists(path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Bookings'
+    ws.append(headers)
+    wb.save(path)
+  # Append new row
+  wb = load_workbook(path)
+  ws = wb.active
+  ws.append([
+    b.get('ref',''), b.get('fname',''), b.get('lname',''), b.get('email',''), b.get('phone',''),
+    b.get('checkin',''), b.get('checkout',''), b.get('nights',''), b.get('room_type',''), b.get('total',''),
+    b.get('status',''), b.get('discount_type',''), b.get('payment_method',''), b.get('booking_type',''), b.get('created_at','')
+  ])
+  wb.save(path)
 
 def rand_ref():
     return "GVH-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -445,7 +472,7 @@ function showRoomDetails(type, price, capacity, features, description, image) {
   document.getElementById('modalPrice').textContent = '₱' + parseInt(price).toLocaleString() + ' / night';
   document.getElementById('modalCap').textContent = 'Max Capacity: ' + capacity + ' pax';
   document.getElementById('modalDesc').textContent = description || 'No description available.';
-  document.getElementById('modalImg').src = image ? '/' + image : 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80';
+  document.getElementById('modalImg').src = image ? (image.startsWith('http') ? image : '/' + image) : 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80';
   
   const featCont = document.getElementById('modalFeat');
   featCont.innerHTML = '';
@@ -1012,7 +1039,7 @@ NEW_TPL = BASE.replace("{% block body %}{% endblock %}", """
   <div class="room-summary-grid">
     {% for rs in room_summary %}
     <div class="room-summary-card">
-      <img src="{{ '/' + rs['image_url'] if rs['image_url'] else 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80' }}" style="width:100%; height:120px; object-fit:cover; border-radius:4px; margin-bottom:10px">
+      <img src="{{ rs['image_url'] if rs['image_url'] and rs['image_url'].startswith('http') else ('/' + rs['image_url'] if rs['image_url'] else 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80') }}" style="width:100%; height:120px; object-fit:cover; border-radius:4px; margin-bottom:10px">
       <div class="room-sum-type">{{ rs['type'] }}</div>
       <div class="room-sum-price">₱{{ "{:,.2f}".format(rs['price']) }} <span style="font-size:10px;font-weight:400;color:var(--muted)">/ night</span></div>
       <div style="font-size:11px; color:var(--muted); margin-top:8px; line-height:1.4">
@@ -1075,7 +1102,7 @@ NEW_TPL = BASE.replace("{% block body %}{% endblock %}", """
       {% for r in rooms %}
         <label class="room-card {{ 'checked' if form.room==r.id|string }}" style="display:flex; flex-direction:column">
           <input type="radio" name="room" value="{{ r.id }}" data-price="{{ r.price }}" {{ 'checked' if form.room==r.id|string }} required/>
-          <img src="{{ '/' + r.image_url if r.image_url else 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80' }}" style="width:100%; height:80px; object-fit:cover; border-radius:4px; margin-bottom:8px">
+          <img src="{{ r.image_url if r.image_url and r.image_url.startswith('http') else ('/' + r.image_url if r.image_url else 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80') }}" style="width:100%; height:80px; object-fit:cover; border-radius:4px; margin-bottom:8px">
           <div class="room-name">{{ r.type }}</div>
           <div class="room-price">₱{{ "{:,}".format(r.price) }}<span style="font-size:11px;color:var(--muted)">/night</span></div>
           <div class="room-feat">Max {{ r.capacity }} guests</div>
@@ -1166,22 +1193,32 @@ def new_booking():
             total = int(subtotal * (1 - total_disc))
             
             ref      = rand_ref()
+            created_at = datetime.now().isoformat()
             conn.execute("""
-                INSERT INTO bookings (ref,fname,lname,email,phone,checkin,checkout,nights,
-                adults,children,room_id,room_type,amenities,room_total,amen_total,total,
-                status,discount_type,payment_method,booking_type,requests,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              INSERT INTO bookings (ref,fname,lname,email,phone,checkin,checkout,nights,
+              adults,children,room_id,room_type,amenities,room_total,amen_total,total,
+              status,discount_type,payment_method,booking_type,requests,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (ref, form["fname"], form["lname"], form["email"], form["phone"],
-                  form["checkin"], form["checkout"], nights,
-                  int(form["adults"]), int(form["children"]),
-                  room["id"], room["type"], ",".join(form["amenities"]),
-                  room_tot, am_tot, total,
-                  "Pending", form["discount_type"], form["payment_method"], form["booking_type"], form["requests"], datetime.now().isoformat()))
+                form["checkin"], form["checkout"], nights,
+                int(form["adults"]), int(form["children"]),
+                room["id"], room["type"], ",".join(form["amenities"]),
+                room_tot, am_tot, total,
+                "Pending", form["discount_type"], form["payment_method"], form["booking_type"], form["requests"], created_at))
             conn.commit()
             conn.close()
             msg = f"Booking created! Reference: {ref}"
             if total_disc > 0: msg += f" ({int(total_disc*100)}% total discount applied!)"
             log_action(f"Created booking {ref} for {form['fname']} {form['lname']}")
             flash(msg, "success")
+            # Append to Excel (best-effort)
+            try:
+              append_booking_to_excel({
+                'ref': ref, 'fname': form['fname'], 'lname': form['lname'], 'email': form['email'], 'phone': form['phone'],
+                'checkin': form['checkin'], 'checkout': form['checkout'], 'nights': nights, 'room_type': room['type'], 'total': total,
+                'status': 'Pending', 'discount_type': form['discount_type'], 'payment_method': form['payment_method'], 'booking_type': form['booking_type'], 'created_at': created_at
+              })
+            except Exception:
+              pass
             return redirect(url_for("view_booking", ref=ref))
         for e in errors:
             flash(e, "danger")
@@ -1268,8 +1305,8 @@ def delete_user(uid):
 PUBLIC_BOOKING_TPL = BASE.replace("{% block body %}{% endblock %}", """
 <div class="page">
   <div style="text-align:center;margin-bottom:2rem">
-    <p style="font-family:'Playfair Display',serif;font-size:28px;color:var(--gold-d);margin-bottom:.5rem">GrandVista Online Reservation</p>
-    <p style="font-size:14px;color:var(--muted)">Book your stay with us in just a few clicks.</p>
+    <p style="font-family:'Playfair Display',serif;font-size:28px;color:var(--gold-d);margin-bottom:.5rem">GrandVista {{ 'Walk-in Reservation' if session.get('role') == 'Admin' else 'Online Reservation' }}</p>
+    <p style="font-size:14px;color:var(--muted)">{{ 'Create a new walk-in booking for your customer' if session.get('role') == 'Admin' else 'Book your stay with us in just a few clicks.' }}</p>
   </div>
   
   <form method="post">
@@ -1322,7 +1359,7 @@ PUBLIC_BOOKING_TPL = BASE.replace("{% block body %}{% endblock %}", """
       <div class="rooms-grid">
       {% for r in rooms %}
         <div class="room-card" style="display:flex; flex-direction:column">
-          <img src="{{ '/' + r.image_url if r.image_url else 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80' }}" class="room-card-img">
+          <img src="{{ r.image_url if r.image_url and r.image_url.startswith('http') else ('/' + r.image_url if r.image_url else 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=600&q=80') }}" class="room-card-img">
           <div class="room-name">{{ r.type }}</div>
           <div class="room-price">₱{{ "{:,.0f}".format(r.price) }}<span style="font-size:11px;font-weight:400;color:var(--muted)">/night</span></div>
           <div class="room-feat" style="margin-bottom:12px">Max {{ r.capacity }} guests</div>
@@ -1343,7 +1380,7 @@ PUBLIC_BOOKING_TPL = BASE.replace("{% block body %}{% endblock %}", """
         <p style="font-size:12px;color:var(--muted);margin-bottom:.5rem" id="nights-preview">Pick dates to see total</p>
         <p style="font-size:18px;font-weight:600">Total: <span id="total-preview" style="color:var(--gold-d)">—</span></p>
       </div>
-      <button class="btn btn-primary btn-full" type="submit" style="margin-top:1rem;padding:15px">Confirm Online Reservation</button>
+      <button class="btn btn-primary btn-full" type="submit" style="margin-top:1rem;padding:15px">Confirm {{ 'Walk-in Reservation' if session.get('role') == 'Admin' else 'Online Reservation' }}</button>
     </div>
   </form>
 </div>
@@ -1432,6 +1469,8 @@ def reserve():
         total = int(room_tot * (1 - total_disc))
         
         ref = rand_ref()
+        created_at = datetime.now().isoformat()
+        booking_type = "Walk-in" if session.get("role") == "Admin" else "Online"
         conn = get_db()
         conn.execute("""
             INSERT INTO bookings (ref,fname,lname,email,phone,checkin,checkout,nights,
@@ -1439,9 +1478,18 @@ def reserve():
             status,discount_type,payment_method,booking_type,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (ref, fname, lname, email, phone, checkin, checkout, nights,
               adults, children, room["id"], room["type"], "", room_tot, 0, total,
-              "Pending", disc_type, pay_method, "Online", datetime.now().isoformat()))
+              "Pending", disc_type, pay_method, booking_type, created_at))
         conn.commit()
         conn.close()
+        # Append to Excel (best-effort)
+        try:
+          append_booking_to_excel({
+            'ref': ref, 'fname': fname, 'lname': lname, 'email': email, 'phone': phone,
+            'checkin': checkin, 'checkout': checkout, 'nights': nights, 'room_type': room['type'], 'total': total,
+            'status': 'Pending', 'discount_type': disc_type, 'payment_method': pay_method, 'booking_type': booking_type, 'created_at': created_at
+          })
+        except Exception:
+          pass
         
         payment_info = ""
         if pay_method == "Card":
